@@ -1,0 +1,17 @@
+.DS_Store
+Thumbs.db
+
+.build/
+Packages/
+
+DerivedData/
+build/
+
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcuserdatad/
+*.xcuserstate
+
+*.swp
+*.swo

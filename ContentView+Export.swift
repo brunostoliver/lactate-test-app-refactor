@@ -11,7 +11,7 @@ extension ContentView {
             encoder.dateEncodingStrategy = .iso8601
 
             let data = try encoder.encode(test)
-            let filename = sanitizedFilename("\(test.athleteName)_\(isoDateString(test.date))_lactate_test.json")
+            let filename = sanitizedFilename("\(test.resolvedTestName)_\(isoDateString(test.date))_lactate_test.json")
             let url = try writeExportFile(data: data, filename: filename)
             shareItem = ShareItem(url: url)
         } catch {
@@ -20,13 +20,14 @@ extension ContentView {
         }
     }
 
-    func exportAllSavedTestsJSON() {
+    func exportAllSavedTestsJSON(_ testsToExport: [LactateTest]? = nil) {
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
 
-            let data = try encoder.encode(store.tests)
+            let tests = testsToExport ?? store.tests
+            let data = try encoder.encode(tests)
             let filename = sanitizedFilename("all_lactate_tests_\(timestampString()).json")
             let url = try writeExportFile(data: data, filename: filename)
             shareItem = ShareItem(url: url)
@@ -45,7 +46,7 @@ extension ContentView {
                 throw ExportError.encodingFailed
             }
 
-            let filename = sanitizedFilename("\(test.athleteName)_\(isoDateString(test.date))_lactate_test.csv")
+            let filename = sanitizedFilename("\(test.resolvedTestName)_\(isoDateString(test.date))_lactate_test.csv")
             let url = try writeExportFile(data: data, filename: filename)
             shareItem = ShareItem(url: url)
         } catch {
@@ -54,9 +55,10 @@ extension ContentView {
         }
     }
 
-    func exportAllSavedTestsCSV() {
+    func exportAllSavedTestsCSV(_ testsToExport: [LactateTest]? = nil) {
         do {
-            let csv = csvString(for: store.tests)
+            let tests = testsToExport ?? store.tests
+            let csv = csvString(for: tests)
             guard let data = csv.data(using: .utf8) else {
                 throw ExportError.encodingFailed
             }
@@ -90,6 +92,7 @@ extension ContentView {
     func csvHeaderRow() -> String {
         [
             "athlete_name",
+            "test_name",
             "date",
             "sport",
             "step_index",
@@ -126,6 +129,7 @@ extension ContentView {
 
         let values: [String] = [
             test.athleteName,
+            test.resolvedTestName,
             isoDateString(test.date),
             test.sport.rawValue,
             String(step.stepIndex),
@@ -148,7 +152,7 @@ extension ContentView {
     func exportSingleTestPDF(_ test: LactateTest) {
         do {
             let data = try pdfData(for: [test])
-            let filename = sanitizedFilename("\(test.athleteName)_\(isoDateString(test.date))_lactate_report.pdf")
+            let filename = sanitizedFilename("\(test.resolvedTestName)_\(isoDateString(test.date))_lactate_report.pdf")
             let url = try writeExportFile(data: data, filename: filename)
             shareItem = ShareItem(url: url)
         } catch {
@@ -158,9 +162,10 @@ extension ContentView {
     }
 
     @MainActor
-    func exportAllSavedTestsPDF() {
+    func exportAllSavedTestsPDF(_ testsToExport: [LactateTest]? = nil) {
         do {
-            let data = try pdfData(for: store.tests)
+            let tests = testsToExport ?? store.tests
+            let data = try pdfData(for: tests)
             let filename = sanitizedFilename("all_lactate_reports_\(timestampString()).pdf")
             let url = try writeExportFile(data: data, filename: filename)
             shareItem = ShareItem(url: url)
@@ -256,6 +261,7 @@ extension ContentView {
 
                 drawSectionHeader("Athlete")
                 drawLine("Name: \(test.athleteName)", font: .systemFont(ofSize: 12))
+                drawLine("Test: \(test.resolvedTestName)", font: .systemFont(ofSize: 12))
                 drawLine("Sport: \(test.sport.rawValue.capitalized)", font: .systemFont(ofSize: 12))
                 drawLine("Date: \(shortDateString(test.date))", font: .systemFont(ofSize: 12), spacingAfter: 12)
 
@@ -316,7 +322,7 @@ extension ContentView {
                 return interpolatedThresholdPoint(targetLactate: dmaxLactate, points: points)
             }(),
             lt2Point: interpolatedThresholdPoint(targetLactate: 4.0, points: points),
-            title: "\(test.athleteName) - Lactate Curve"
+            title: "\(test.resolvedTestName) - Lactate Curve"
         )
         .frame(width: 700, height: 380)
         .background(Color.white)
@@ -383,7 +389,7 @@ extension ContentView {
                 lactate: lactate,
                 heartRate: step.avgHeartRate,
                 power: power,
-                seriesLabel: test.athleteName,
+                seriesLabel: test.resolvedTestName,
                 seriesColor: .blue
             )
         }

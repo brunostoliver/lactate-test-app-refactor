@@ -9,10 +9,78 @@ import SwiftUI
 import UIKit
 import Charts
 
-struct ContentView: View {
-    @ObservedObject var store: SwiftDataTestsStore
+private struct SavedTestsTopPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
 
-    @State var unitPreference: UnitPreference = .metric
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct ScrollViewResolver: UIViewRepresentable {
+    let onResolve: (UIScrollView) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        DispatchQueue.main.async {
+            if let scrollView = view.enclosingScrollView() {
+                onResolve(scrollView)
+            }
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        DispatchQueue.main.async {
+            if let scrollView = uiView.enclosingScrollView() {
+                onResolve(scrollView)
+            }
+        }
+    }
+}
+
+private extension UIView {
+    func enclosingScrollView() -> UIScrollView? {
+        var candidate = superview
+        while let view = candidate {
+            if let scrollView = view as? UIScrollView {
+                return scrollView
+            }
+            candidate = view.superview
+        }
+        return nil
+    }
+}
+
+struct ContentView: View {
+    enum ScrollTarget {
+        case top
+        case savedTests
+    }
+
+    enum ScreenMode {
+        case detail
+        case editor
+    }
+
+    enum LoadedTestMode {
+        case editing
+        case comparisonBase
+    }
+
+    struct EditorDestination: Identifiable {
+        let id = UUID()
+        let test: LactateTest?
+    }
+
+    @ObservedObject var store: SwiftDataTestsStore
+    let selectedAthlete: Athlete?
+    let showsNavigationChrome: Bool
+    let screenMode: ScreenMode
+
+    @Environment(\.dismiss) private var dismiss
+
+    @AppStorage("unitPreference") var unitPreferenceRawValue: String = UnitPreference.metric.rawValue
     @AppStorage("appearanceMode") var appearanceModeRawValue: String = AppearanceMode.system.rawValue
 
     @State var draft = LactateTestDraft()
@@ -21,59 +89,58 @@ struct ContentView: View {
     @State var selectedGraphPoint: GraphPoint? = nil
     @State var comparedTestIDs: [UUID] = []
     @State var showFullScreenChart: Bool = false
-    @State var showDeleteSavedTestsAlert: Bool = false
     @State var editingTest: LactateTest? = nil
+    @State var loadedTestMode: LoadedTestMode? = nil
     @State var testPendingDeletion: LactateTest? = nil
     @State var showDeleteSingleTestAlert: Bool = false
 
     @State var shareItem: ShareItem? = nil
     @State var exportErrorMessage: String? = nil
     @State var showExportErrorAlert: Bool = false
+    @State var didApplySelectedAthlete = false
+    @State var pendingScrollTarget: ScrollTarget? = .top
+    @State var savedTestsSectionTop: CGFloat = 0
+    @State var savedTestsSectionTopBeforePreserving: CGFloat? = nil
+    @State var shouldPreserveSavedTestsViewport = false
+    @State var scrollView: UIScrollView? = nil
+    @State var editorDestination: EditorDestination? = nil
 
-    init(store: SwiftDataTestsStore) {
+    init(
+        store: SwiftDataTestsStore,
+        selectedAthlete: Athlete? = nil,
+        showsNavigationChrome: Bool = true,
+        screenMode: ScreenMode = .detail,
+        initialEditingTest: LactateTest? = nil
+    ) {
         self.store = store
+        self.selectedAthlete = selectedAthlete
+        self.showsNavigationChrome = showsNavigationChrome
+        self.screenMode = screenMode
+        _draft = State(
+            initialValue: initialEditingTest.map {
+                LactateTestDraft(
+                    athleteID: $0.athleteID,
+                    athleteName: $0.athleteName,
+                    testName: $0.resolvedTestName,
+                    sport: $0.sport,
+                    date: $0.date,
+                    steps: $0.steps
+                )
+            } ?? LactateTestDraft()
+        )
+        _editingTest = State(initialValue: initialEditingTest)
+        _loadedTestMode = State(initialValue: initialEditingTest == nil ? nil : .editing)
     }
 
     var body: some View {
-        NavigationView {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Color.clear
-                            .frame(height: 1)
-                            .id("topOfForm")
-
-                        editingBannerSection
-                        formSection
-
-                        if hasEnoughDataForAnalysis {
-                            tableSection
-                        }
-
-                        if shouldShowComparisonSection {
-                            comparisonSection
-                        }
-
-                        if hasEnoughDataForAnalysis {
-                            graphSection
-                            thresholdsSection
-                            trainingZonesSection
-                        }
-
-                        saveSection
-                        savedTestsSection
-                        appearanceSection
-                        sampleTestsSection
-                    }
-                    .padding()
+        Group {
+            if showsNavigationChrome {
+                NavigationView {
+                    editorScrollView
+                        .navigationBarTitle(navigationTitle, displayMode: .inline)
                 }
-                .navigationBarTitle("Lactate Test Intake", displayMode: .inline)
-                .navigationBarItems(trailing: unitsPicker)
-                .onChange(of: editingTest?.id) {
-                    withAnimation {
-                        proxy.scrollTo("topOfForm", anchor: .top)
-                    }
-                }
+            } else {
+                editorScrollView
             }
         }
         .preferredColorScheme(appearanceMode.colorScheme)
@@ -99,14 +166,6 @@ struct ContentView: View {
         .sheet(item: $shareItem) { item in
             ShareSheet(activityItems: [item.url])
         }
-        .alert("Delete all saved tests?", isPresented: $showDeleteSavedTestsAlert) {
-            Button("Delete", role: .destructive) {
-                deleteSavedTests()
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("This will permanently erase all saved lactate tests stored in the app.")
-        }
         .alert("Delete this saved test?", isPresented: $showDeleteSingleTestAlert, presenting: testPendingDeletion) { test in
             Button("Delete", role: .destructive) {
                 deleteSingleSavedTest(test)
@@ -115,12 +174,28 @@ struct ContentView: View {
                 testPendingDeletion = nil
             }
         } message: { test in
-            Text("This will permanently delete \(test.athleteName) from saved tests.")
+            Text("This will permanently delete \(test.resolvedTestName) from saved tests.")
         }
         .alert("Export Failed", isPresented: $showExportErrorAlert) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(exportErrorMessage ?? "An unknown export error occurred.")
+        }
+        .sheet(item: $editorDestination) { destination in
+            NavigationStack {
+                ContentView(
+                    store: store,
+                    selectedAthlete: selectedAthlete,
+                    showsNavigationChrome: false,
+                    screenMode: .editor,
+                    initialEditingTest: destination.test
+                )
+                .navigationTitle(destination.test == nil ? "New Test" : "Edit Test")
+                .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+        .onAppear {
+            applySelectedAthleteIfNeeded()
         }
     }
 
@@ -130,12 +205,125 @@ struct ContentView: View {
         AppearanceMode(rawValue: appearanceModeRawValue) ?? .system
     }
 
+    var unitPreference: UnitPreference {
+        UnitPreference(rawValue: unitPreferenceRawValue) ?? .metric
+    }
+
     var currentSeriesLabel: String {
-        let trimmed = draft.athleteName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return "Current Input"
+        draft.resolvedTestName
+    }
+
+    var navigationTitle: String {
+        selectedAthlete?.name ?? "Lactate Test Intake"
+    }
+
+    var displayedTests: [LactateTest] {
+        guard let selectedAthlete else { return store.tests }
+        return store.tests(for: selectedAthlete.id)
+    }
+
+    var isEditorScreen: Bool {
+        screenMode == .editor
+    }
+
+    @ViewBuilder
+    var editorScrollView: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Color.clear
+                        .frame(height: 1)
+                        .id("topOfForm")
+
+                    if !isEditorScreen {
+                        enterNewTestSection
+                        savedTestsSection
+                            .id("savedTestsSection")
+                            .background(
+                                GeometryReader { geometry in
+                                    Color.clear.preference(
+                                        key: SavedTestsTopPreferenceKey.self,
+                                        value: geometry.frame(in: .named("editorScroll")).minY
+                                    )
+                                }
+                            )
+                    }
+
+                    if isEditorScreen {
+                        editingBannerSection
+                        formSection
+                    }
+
+                    if isEditorScreen && hasEnoughDataForAnalysis {
+                        tableSection
+                    }
+
+                    if shouldShowComparisonSection {
+                        comparisonSection
+                    }
+
+                    if hasEnoughDataForAnalysis {
+                        graphSection
+                        thresholdsSection
+                        trainingZonesSection
+                    }
+
+                    if isEditorScreen {
+                        saveSection
+                        sampleTestsSection
+                    }
+                }
+                .padding()
+            }
+            .coordinateSpace(name: "editorScroll")
+            .background(
+                ScrollViewResolver { resolvedScrollView in
+                    scrollView = resolvedScrollView
+                }
+            )
+            .onPreferenceChange(SavedTestsTopPreferenceKey.self) { newTop in
+                let previousTop = savedTestsSectionTop
+                savedTestsSectionTop = newTop
+
+                guard shouldPreserveSavedTestsViewport,
+                      let beforeTop = savedTestsSectionTopBeforePreserving,
+                      let scrollView else {
+                    return
+                }
+
+                let delta = newTop - beforeTop
+                if abs(delta) > 0.5 {
+                    DispatchQueue.main.async {
+                        scrollView.setContentOffset(
+                            CGPoint(x: scrollView.contentOffset.x, y: scrollView.contentOffset.y + delta),
+                            animated: false
+                        )
+                    }
+                }
+
+                shouldPreserveSavedTestsViewport = false
+                savedTestsSectionTopBeforePreserving = nil
+
+                if previousTop == 0 {
+                    savedTestsSectionTop = newTop
+                }
+            }
+            .onChange(of: editingTest?.id) {
+                switch pendingScrollTarget {
+                case .top:
+                    withAnimation {
+                        proxy.scrollTo("topOfForm", anchor: .top)
+                    }
+                case .savedTests:
+                    withAnimation {
+                        proxy.scrollTo("savedTestsSection", anchor: .top)
+                    }
+                case nil:
+                    break
+                }
+                pendingScrollTarget = .top
+            }
         }
-        return "\(trimmed) (\(shortDateString(draft.date)))"
     }
 
     var selectedComparisonTests: [LactateTest] {
@@ -295,13 +483,25 @@ struct ContentView: View {
             store.appendTest(draft.asLactateTest())
         }
 
+        if isEditorScreen {
+            dismiss()
+        }
         resetEntryFields()
     }
 
-    func loadTestIntoDraft(_ test: LactateTest) {
+    func loadTestIntoDraft(
+        _ test: LactateTest,
+        scrollTarget: ScrollTarget? = .top,
+        mode: LoadedTestMode = .editing
+    ) {
+        pendingScrollTarget = scrollTarget
         editingTest = test
+        loadedTestMode = mode
+        comparedTestIDs.removeAll { $0 == test.id }
         draft = LactateTestDraft(
+            athleteID: test.athleteID,
             athleteName: test.athleteName,
+            testName: test.resolvedTestName,
             sport: test.sport,
             date: test.date,
             steps: test.steps
@@ -319,11 +519,22 @@ struct ContentView: View {
     }
 
     func canAddMoreComparisons(for test: LactateTest) -> Bool {
+        if isLoaded(test) { return false }
         if comparedTestIDs.contains(test.id) { return true }
         return comparedTestIDs.count < 2
     }
 
     func addComparedTest(_ test: LactateTest) {
+        savedTestsSectionTopBeforePreserving = savedTestsSectionTop
+        shouldPreserveSavedTestsViewport = true
+
+        if editingTest == nil {
+            pendingScrollTarget = nil
+            loadTestIntoDraft(test, scrollTarget: nil, mode: .comparisonBase)
+            return
+        }
+
+        guard !isLoaded(test) else { return }
         guard !comparedTestIDs.contains(test.id) else { return }
         guard comparedTestIDs.count < 2 else { return }
         comparedTestIDs.append(test.id)
@@ -338,22 +549,15 @@ struct ContentView: View {
     func resetEntryFields() {
         draft.reset()
         editingTest = nil
+        loadedTestMode = nil
         graphXAxis = .power
         selectedGraphPoint = nil
+        applySelectedAthlete(force: true)
     }
 
     func resetForm() {
         resetEntryFields()
         comparedTestIDs = []
-    }
-
-    func deleteSavedTests() {
-        store.clearAll()
-        comparedTestIDs = []
-        selectedGraphPoint = nil
-        editingTest = nil
-        testPendingDeletion = nil
-        showDeleteSingleTestAlert = false
     }
 
     func deleteSingleSavedTest(_ test: LactateTest) {
@@ -430,8 +634,12 @@ struct ContentView: View {
             )
         }
 
+        let targetAthleteID = selectedAthlete?.id
+        let targetAthleteName = selectedAthlete?.name ?? athleteName
+
         draft = LactateTestDraft(
-            athleteName: athleteName,
+            athleteID: targetAthleteID,
+            athleteName: targetAthleteName,
             sport: .cycling,
             date: formatter.date(from: dateString) ?? Date(),
             steps: loadedSteps.isEmpty ? [LactateStep.emptyStep(stepIndex: 1)] : loadedSteps
@@ -515,6 +723,20 @@ struct ContentView: View {
                 SpeedFormatter.string(fromKmh: $0, unit: unitPreference)
             } ?? "-"
             return "\(step.stepIndex) | \(lactate) | \(hr) | \(speed) | \(power)"
+        }
+    }
+
+    func applySelectedAthleteIfNeeded() {
+        guard !didApplySelectedAthlete else { return }
+        didApplySelectedAthlete = true
+        applySelectedAthlete(force: true)
+    }
+
+    func applySelectedAthlete(force: Bool = false) {
+        guard let selectedAthlete else { return }
+        if force || draft.athleteName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            draft.athleteID = selectedAthlete.id
+            draft.athleteName = selectedAthlete.name
         }
     }
 

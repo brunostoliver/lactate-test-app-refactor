@@ -11,6 +11,7 @@ import Combine
 
 @MainActor
 final class SwiftDataTestsStore: ObservableObject {
+    @Published private(set) var athletes: [Athlete] = []
     @Published private(set) var tests: [LactateTest] = []
 
     private var modelContext: ModelContext?
@@ -24,14 +25,17 @@ final class SwiftDataTestsStore: ObservableObject {
 
     func reload() {
         guard let modelContext else {
+            athletes = []
             tests = []
             return
         }
 
         do {
+            athletes = try MigrationService.loadAllSwiftDataAthletes(from: modelContext)
             tests = try MigrationService.loadAllSwiftDataTests(from: modelContext)
         } catch {
-            print("Failed to load SwiftData tests: \(error)")
+            print("Failed to load SwiftData store: \(error)")
+            athletes = []
             tests = []
         }
     }
@@ -42,10 +46,18 @@ final class SwiftDataTestsStore: ObservableObject {
             return
         }
 
-        let entity = test.makeEntity()
-        modelContext.insert(entity)
-
         do {
+            let athlete = try athleteEntity(
+                forName: test.athleteName,
+                athleteID: test.athleteID,
+                in: modelContext
+            )
+
+            let entity = test.makeEntity()
+            entity.athleteName = athlete.name
+            entity.athlete = athlete
+            modelContext.insert(entity)
+
             try modelContext.save()
             reload()
         } catch {
@@ -68,7 +80,19 @@ final class SwiftDataTestsStore: ObservableObject {
                 return
             }
 
-            existing.athleteName = updatedTest.athleteName
+            let athlete = try athleteEntity(
+                forName: updatedTest.athleteName,
+                athleteID: updatedTest.athleteID,
+                in: modelContext
+            )
+
+            existing.athleteName = athlete.name
+            existing.testName = updatedTest.resolvedTestName
+            existing.temperatureCelsius = updatedTest.temperatureCelsius
+            existing.temperatureUnit = updatedTest.temperatureUnit
+            existing.humidityPercent = updatedTest.humidityPercent
+            existing.terrain = updatedTest.terrain
+            existing.athlete = athlete
             existing.sport = updatedTest.sport
             existing.date = updatedTest.date
 
@@ -96,9 +120,15 @@ final class SwiftDataTestsStore: ObservableObject {
     func updateTest(_ existingTest: LactateTest, with draft: LactateTestDraft) {
         let updatedTest = LactateTest(
             id: existingTest.id,
+            athleteID: existingTest.athleteID,
             athleteName: draft.athleteName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Untitled Test"
+                ? "Untitled Athlete"
                 : draft.athleteName,
+            testName: draft.resolvedTestName,
+            temperatureCelsius: draft.temperatureCelsius,
+            temperatureUnit: draft.temperatureUnit,
+            humidityPercent: draft.humidityPercent,
+            terrain: draft.terrain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : draft.terrain.trimmingCharacters(in: .whitespacesAndNewlines),
             sport: draft.sport,
             date: draft.date,
             steps: draft.steps
@@ -137,6 +167,46 @@ final class SwiftDataTestsStore: ObservableObject {
         }
     }
 
+    func tests(for athleteID: UUID) -> [LactateTest] {
+        tests
+            .filter { $0.athleteID == athleteID }
+            .sorted { lhs, rhs in
+                if lhs.date == rhs.date {
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+                return lhs.date > rhs.date
+            }
+    }
+
+    @discardableResult
+    func appendAthlete(name: String) -> Athlete? {
+        guard let modelContext else {
+            print("SwiftDataTestsStore is not configured with a ModelContext.")
+            return nil
+        }
+
+        let normalizedName = MigrationService.normalizedAthleteName(name)
+
+        do {
+            let descriptor = FetchDescriptor<AthleteEntity>()
+            let entities = try modelContext.fetch(descriptor)
+
+            if let existing = entities.first(where: { $0.name.localizedCaseInsensitiveCompare(normalizedName) == .orderedSame }) {
+                reload()
+                return Athlete(entity: existing)
+            }
+
+            let athlete = AthleteEntity(name: normalizedName)
+            modelContext.insert(athlete)
+            try modelContext.save()
+            reload()
+            return Athlete(entity: athlete)
+        } catch {
+            print("Failed to save athlete: \(error)")
+            return nil
+        }
+    }
+
     func replaceAllTests(with newTests: [LactateTest]) {
         guard let modelContext else {
             print("SwiftDataTestsStore is not configured with a ModelContext.")
@@ -147,7 +217,15 @@ final class SwiftDataTestsStore: ObservableObject {
             try MigrationService.clearAllSwiftDataTests(from: modelContext)
 
             for test in newTests {
+                let athlete = try athleteEntity(
+                    forName: test.athleteName,
+                    athleteID: test.athleteID,
+                    in: modelContext
+                )
+
                 let entity = test.makeEntity()
+                entity.athleteName = athlete.name
+                entity.athlete = athlete
                 modelContext.insert(entity)
             }
 
@@ -170,5 +248,33 @@ final class SwiftDataTestsStore: ObservableObject {
         } catch {
             print("Failed to clear all SwiftData tests: \(error)")
         }
+    }
+
+    private func athleteEntity(
+        forName rawName: String,
+        athleteID: UUID?,
+        in context: ModelContext
+    ) throws -> AthleteEntity {
+        let normalizedName = MigrationService.normalizedAthleteName(rawName)
+        let descriptor = FetchDescriptor<AthleteEntity>()
+        let athletes = try context.fetch(descriptor)
+
+        if let athleteID,
+           let existingByID = athletes.first(where: { $0.id == athleteID }) {
+            if existingByID.name != normalizedName {
+                existingByID.name = normalizedName
+            }
+            return existingByID
+        }
+
+        if let existingByName = athletes.first(where: {
+            $0.name.localizedCaseInsensitiveCompare(normalizedName) == .orderedSame
+        }) {
+            return existingByName
+        }
+
+        let athlete = AthleteEntity(name: normalizedName)
+        context.insert(athlete)
+        return athlete
     }
 }

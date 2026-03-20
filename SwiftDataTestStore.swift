@@ -87,6 +87,7 @@ final class SwiftDataTestsStore: ObservableObject {
             )
 
             existing.athleteName = athlete.name
+            existing.testName = updatedTest.resolvedTestName
             existing.athlete = athlete
             existing.sport = updatedTest.sport
             existing.date = updatedTest.date
@@ -119,6 +120,7 @@ final class SwiftDataTestsStore: ObservableObject {
             athleteName: draft.athleteName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? "Untitled Athlete"
                 : draft.athleteName,
+            testName: draft.resolvedTestName,
             sport: draft.sport,
             date: draft.date,
             steps: draft.steps

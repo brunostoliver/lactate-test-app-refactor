@@ -3,9 +3,15 @@ import SwiftUI
 struct AthleteListView: View {
     @ObservedObject var store: SwiftDataTestsStore
 
+    @AppStorage("appearanceMode") private var appearanceModeRawValue: String = AppearanceMode.system.rawValue
+
     @State private var newAthleteName = ""
     @State private var showNewAthleteSheet = false
     @State private var selectedAthleteForNewTest: Athlete?
+
+    private var appearanceMode: AppearanceMode {
+        AppearanceMode(rawValue: appearanceModeRawValue) ?? .system
+    }
 
     var body: some View {
         NavigationStack {
@@ -43,8 +49,18 @@ struct AthleteListView: View {
                         }
                     }
                 }
+
+                Section("Appearance") {
+                    Picker("Appearance", selection: $appearanceModeRawValue) {
+                        ForEach(AppearanceMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
             }
             .navigationTitle("Athletes")
+            .preferredColorScheme(appearanceMode.colorScheme)
             .sheet(isPresented: $showNewAthleteSheet) {
                 NavigationStack {
                     Form {
@@ -63,7 +79,9 @@ struct AthleteListView: View {
 
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Create") {
-                                selectedAthleteForNewTest = store.appendAthlete(name: newAthleteName)
+                                let trimmedName = newAthleteName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                store.appendAthlete(name: trimmedName)
+                                selectedAthleteForNewTest = store.athletes.first { $0.name == trimmedName }
                                 showNewAthleteSheet = false
                             }
                             .disabled(newAthleteName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -82,3 +100,5 @@ struct AthleteListView: View {
         }
     }
 }
+
+

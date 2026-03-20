@@ -68,6 +68,20 @@ struct ContentView: View {
         case comparisonBase
     }
 
+    enum ActiveFilterDatePicker: Identifiable {
+        case start
+        case end
+
+        var id: String {
+            switch self {
+            case .start:
+                return "start"
+            case .end:
+                return "end"
+            }
+        }
+    }
+
     struct EditorDestination: Identifiable {
         let id = UUID()
         let test: LactateTest?
@@ -91,6 +105,10 @@ struct ContentView: View {
     @State var showFullScreenChart: Bool = false
     @State var editingTest: LactateTest? = nil
     @State var loadedTestMode: LoadedTestMode? = nil
+    @State var testSportFilter: TestSportFilter = .all
+    @State var startDateFilter: Date? = nil
+    @State var endDateFilter: Date? = nil
+    @State var activeFilterDatePicker: ActiveFilterDatePicker? = nil
     @State var testPendingDeletion: LactateTest? = nil
     @State var showDeleteSingleTestAlert: Bool = false
 
@@ -122,6 +140,10 @@ struct ContentView: View {
                     athleteID: $0.athleteID,
                     athleteName: $0.athleteName,
                     testName: $0.resolvedTestName,
+                    temperatureCelsius: $0.temperatureCelsius,
+                    temperatureUnit: $0.temperatureUnit,
+                    humidityPercent: $0.humidityPercent,
+                    terrain: $0.terrain ?? "",
                     sport: $0.sport,
                     date: $0.date,
                     steps: $0.steps
@@ -192,7 +214,63 @@ struct ContentView: View {
                 )
                 .navigationTitle(destination.test == nil ? "New Test" : "Edit Test")
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            editorDestination = nil
+                        }
+                    }
+                }
             }
+        }
+        .sheet(item: $activeFilterDatePicker) { picker in
+            NavigationStack {
+                VStack {
+                    DatePicker(
+                        picker == .start ? "Start Date" : "End Date",
+                        selection: Binding(
+                            get: {
+                                switch picker {
+                                case .start:
+                                    return startDateFilter ?? Date()
+                                case .end:
+                                    return endDateFilter ?? Date()
+                                }
+                            },
+                            set: { newValue in
+                                switch picker {
+                                case .start:
+                                    startDateFilter = newValue
+                                case .end:
+                                    endDateFilter = newValue
+                                }
+                                DispatchQueue.main.async {
+                                    activeFilterDatePicker = nil
+                                }
+                            }
+                        ),
+                        displayedComponents: .date
+                    )
+                    .datePickerStyle(.graphical)
+                    .padding()
+
+                    Button("Done") {
+                        activeFilterDatePicker = nil
+                    }
+                    .buttonStyle(FilledActionButtonStyle())
+                    .padding(.bottom)
+                }
+                .navigationTitle(picker == .start ? "Start Date" : "End Date")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            activeFilterDatePicker = nil
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
         }
         .onAppear {
             applySelectedAthleteIfNeeded()
@@ -220,6 +298,29 @@ struct ContentView: View {
     var displayedTests: [LactateTest] {
         guard let selectedAthlete else { return store.tests }
         return store.tests(for: selectedAthlete.id)
+    }
+
+    var filteredDisplayedTests: [LactateTest] {
+        displayedTests.filter { test in
+            let matchesSport = testSportFilter.sport.map { test.sport == $0 } ?? true
+            let matchesStartDate = startDateFilter.map {
+                test.date >= Calendar.current.startOfDay(for: $0)
+            } ?? true
+
+            let matchesEndDate = endDateFilter.map { endDate in
+                let endOfSelectedDay = Calendar.current.date(
+                    byAdding: DateComponents(day: 1, second: -1),
+                    to: Calendar.current.startOfDay(for: endDate)
+                ) ?? endDate
+                return test.date <= endOfSelectedDay
+            } ?? true
+
+            return matchesSport && matchesStartDate && matchesEndDate
+        }
+    }
+
+    var hasActiveTestFilters: Bool {
+        testSportFilter != .all || startDateFilter != nil || endDateFilter != nil
     }
 
     var isEditorScreen: Bool {
@@ -327,7 +428,7 @@ struct ContentView: View {
     }
 
     var selectedComparisonTests: [LactateTest] {
-        store.tests
+        filteredDisplayedTests
             .filter { comparedTestIDs.contains($0.id) }
             .sorted { lhs, rhs in
                 (comparedTestIDs.firstIndex(of: lhs.id) ?? 0) < (comparedTestIDs.firstIndex(of: rhs.id) ?? 0)
@@ -502,6 +603,10 @@ struct ContentView: View {
             athleteID: test.athleteID,
             athleteName: test.athleteName,
             testName: test.resolvedTestName,
+            temperatureCelsius: test.temperatureCelsius,
+            temperatureUnit: test.temperatureUnit,
+            humidityPercent: test.humidityPercent,
+            terrain: test.terrain ?? "",
             sport: test.sport,
             date: test.date,
             steps: test.steps
@@ -558,6 +663,12 @@ struct ContentView: View {
     func resetForm() {
         resetEntryFields()
         comparedTestIDs = []
+    }
+
+    func clearTestFilters() {
+        testSportFilter = .all
+        startDateFilter = nil
+        endDateFilter = nil
     }
 
     func deleteSingleSavedTest(_ test: LactateTest) {
@@ -724,6 +835,68 @@ struct ContentView: View {
             } ?? "-"
             return "\(step.stepIndex) | \(lactate) | \(hr) | \(speed) | \(power)"
         }
+    }
+
+    func temperatureStringBinding() -> Binding<String> {
+        Binding(
+            get: {
+                guard let celsius = draft.temperatureCelsius else { return "" }
+
+                let displayedValue: Double
+                switch draft.temperatureUnit {
+                case .celsius:
+                    displayedValue = celsius
+                case .fahrenheit:
+                    displayedValue = (celsius * 9.0 / 5.0) + 32.0
+                }
+
+                return String(format: "%.1f", displayedValue)
+            },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                guard !trimmed.isEmpty else {
+                    draft.temperatureCelsius = nil
+                    return
+                }
+
+                guard let enteredValue = Double(trimmed.replacingOccurrences(of: ",", with: ".")) else {
+                    draft.temperatureCelsius = nil
+                    return
+                }
+
+                switch draft.temperatureUnit {
+                case .celsius:
+                    draft.temperatureCelsius = enteredValue
+                case .fahrenheit:
+                    draft.temperatureCelsius = (enteredValue - 32.0) * 5.0 / 9.0
+                }
+            }
+        )
+    }
+
+    func humidityStringBinding() -> Binding<String> {
+        Binding(
+            get: {
+                guard let humidity = draft.humidityPercent else { return "" }
+                return String(format: "%.0f", humidity)
+            },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                guard !trimmed.isEmpty else {
+                    draft.humidityPercent = nil
+                    return
+                }
+
+                guard let enteredValue = Double(trimmed.replacingOccurrences(of: ",", with: ".")) else {
+                    draft.humidityPercent = nil
+                    return
+                }
+
+                draft.humidityPercent = max(0.0, min(100.0, enteredValue))
+            }
+        )
     }
 
     func applySelectedAthleteIfNeeded() {

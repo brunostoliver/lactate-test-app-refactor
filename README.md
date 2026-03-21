@@ -42,6 +42,8 @@ Tests can also store environment metadata such as:
 - [ExportLactateChartView.swift](./ExportLactateChartView.swift): simplified chart view used specifically for exported reports and PDF generation.
 - [StepEditor.swift](./StepEditor.swift): reusable editor for a single lactate test step, including heart rate, power, pace, speed, and lactate inputs.
 - [PaceInput.swift](./PaceInput.swift): focused input helper for entering and converting running pace values across unit systems.
+- [SampleTestCatalog.swift](./SampleTestCatalog.swift): central catalog of built-in running and cycling sample tests used for demo loading.
+- [SampleTestPickerView.swift](./SampleTestPickerView.swift): separate sample-test browser that lets the user load one sample into the editor or import all samples.
 - [ShareSheet.swift](./ShareSheet.swift): UIKit bridge used to present the iOS share sheet for exported files.
 - [Formatters.swift](./Formatters.swift): generic pace and speed formatting utilities plus unit-preference helpers used across the app.
 - [DateFormatter+PDFTimestamp.swift](./DateFormatter+PDFTimestamp.swift): date formatter extension used for PDF/export timestamps.

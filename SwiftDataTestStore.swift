@@ -88,6 +88,7 @@ final class SwiftDataTestsStore: ObservableObject {
 
             existing.athleteName = athlete.name
             existing.testName = updatedTest.resolvedTestName
+            existing.restingLactate = updatedTest.restingLactate
             existing.temperatureCelsius = updatedTest.temperatureCelsius
             existing.temperatureUnit = updatedTest.temperatureUnit
             existing.humidityPercent = updatedTest.humidityPercent
@@ -126,6 +127,7 @@ final class SwiftDataTestsStore: ObservableObject {
                 ? "Untitled Athlete"
                 : draft.athleteName,
             testName: draft.resolvedTestName,
+            restingLactate: draft.restingLactate,
             temperatureCelsius: draft.temperatureCelsius,
             temperatureUnit: draft.temperatureUnit,
             humidityPercent: draft.humidityPercent,

@@ -6,11 +6,13 @@ SwiftUI iOS app for recording, analyzing, comparing, and exporting lactate thres
 
 - Athlete-first workflow with SwiftData-backed athlete and test storage
 - Create and manage multiple athletes
+- Store athlete profile details including date of birth and gender
 - Create, view, edit, and compare lactate tests
 - Filter saved tests by sport and date range
 - Graph-based threshold analysis and 5-zone summaries
 - Export saved tests as JSON, CSV, and PDF
 - App-wide appearance and unit preferences
+- Adaptive iPad layouts for landscape and portrait athlete workflows
 
 ## Data Model
 
@@ -22,6 +24,11 @@ Core entities:
 - `LactateTest`
 - `LactateStep`
 
+Athletes can also store profile metadata such as:
+
+- date of birth
+- gender
+
 Tests can also store environment metadata such as:
 
 - temperature
@@ -30,7 +37,9 @@ Tests can also store environment metadata such as:
 
 ## Project Structure
 
+- [AdaptiveRootView.swift](./AdaptiveRootView.swift): adaptive iPad/phone root routing, including wide iPad pane layouts and portrait athlete workspace behavior.
 - [AthleteListView.swift](./AthleteListView.swift): first screen of the app; lets the user create a new athlete, choose an existing athlete, and adjust global appearance and unit preferences.
+- [AthleteProfileEditorView.swift](./AthleteProfileEditorView.swift): reusable athlete profile form for creating and editing athlete name, date of birth, and gender.
 - [ContentView.swift](./ContentView.swift): main screen coordinator; drives the athlete detail view, test editor flow, compare behavior, filtering state, sheets, alerts, and screen-level navigation logic.
 - [ContentView+Sections.swift](./ContentView+Sections.swift): contains most SwiftUI section views used by `ContentView`, including saved tests, forms, graph area, threshold summaries, filters, and action buttons.
 - [ContentView+Analysis.swift](./ContentView+Analysis.swift): contains threshold-analysis logic, graph point generation, Dmax and breakpoint calculations, and training-zone calculations.
@@ -77,3 +86,5 @@ Recent work has been organized around:
 - `main`: stable merged baseline
 - `feature/athlete-tracker`: athlete-first SwiftData workflow
 - `feature/athlete-search`: athlete-level filtering, comparison, and UI refinements
+- `feature/ipad-layout`: iPad-specific workspace and multi-pane layout work
+- `feature/athlete-profile`: athlete DOB/gender profile fields in support of later VO2 max work

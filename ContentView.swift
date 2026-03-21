@@ -61,6 +61,7 @@ struct ContentView: View {
     enum ScreenMode {
         case detail
         case editor
+        case workspace
     }
 
     enum LoadedTestMode {
@@ -87,12 +88,21 @@ struct ContentView: View {
         let test: LactateTest?
     }
 
+    struct ComparisonDestination: Identifiable {
+        let id = UUID()
+        let baseTestID: UUID
+        let comparedTestIDs: [UUID]
+    }
+
     @ObservedObject var store: SwiftDataTestsStore
     let selectedAthlete: Athlete?
     let showsNavigationChrome: Bool
     let screenMode: ScreenMode
+    let externalEditorDestination: Binding<EditorDestination?>?
+    let externalComparisonDestination: Binding<ComparisonDestination?>?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @AppStorage("unitPreference") var unitPreferenceRawValue: String = UnitPreference.metric.rawValue
     @AppStorage("appearanceMode") var appearanceModeRawValue: String = AppearanceMode.system.rawValue
@@ -111,10 +121,14 @@ struct ContentView: View {
     @State var activeFilterDatePicker: ActiveFilterDatePicker? = nil
     @State var testPendingDeletion: LactateTest? = nil
     @State var showDeleteSingleTestAlert: Bool = false
+    @State var showDeleteAthleteAlert: Bool = false
 
     @State var shareItem: ShareItem? = nil
     @State var exportErrorMessage: String? = nil
     @State var showExportErrorAlert: Bool = false
+    @State var showComparisonSportMismatchAlert: Bool = false
+    @State var showRestingLactateInfoAlert: Bool = false
+    @State var activeThresholdInfoTopic: ThresholdInfoTopic? = nil
     @State var didApplySelectedAthlete = false
     @State var pendingScrollTarget: ScrollTarget? = .top
     @State var savedTestsSectionTop: CGFloat = 0
@@ -122,28 +136,37 @@ struct ContentView: View {
     @State var shouldPreserveSavedTestsViewport = false
     @State var scrollView: UIScrollView? = nil
     @State var editorDestination: EditorDestination? = nil
+    @State var showSampleTestPicker: Bool = false
 
     init(
         store: SwiftDataTestsStore,
         selectedAthlete: Athlete? = nil,
         showsNavigationChrome: Bool = true,
         screenMode: ScreenMode = .detail,
-        initialEditingTest: LactateTest? = nil
+        initialEditingTest: LactateTest? = nil,
+        externalEditorDestination: Binding<EditorDestination?>? = nil,
+        externalComparisonDestination: Binding<ComparisonDestination?>? = nil,
+        initialLoadedTestMode: LoadedTestMode? = nil,
+        initialComparedTestIDs: [UUID] = []
     ) {
         self.store = store
         self.selectedAthlete = selectedAthlete
         self.showsNavigationChrome = showsNavigationChrome
         self.screenMode = screenMode
+        self.externalEditorDestination = externalEditorDestination
+        self.externalComparisonDestination = externalComparisonDestination
         _draft = State(
             initialValue: initialEditingTest.map {
                 LactateTestDraft(
                     athleteID: $0.athleteID,
                     athleteName: $0.athleteName,
                     testName: $0.resolvedTestName,
+                    restingLactate: $0.restingLactate,
                     temperatureCelsius: $0.temperatureCelsius,
                     temperatureUnit: $0.temperatureUnit,
                     humidityPercent: $0.humidityPercent,
                     terrain: $0.terrain ?? "",
+                    notes: $0.notes ?? "",
                     sport: $0.sport,
                     date: $0.date,
                     steps: $0.steps
@@ -151,20 +174,17 @@ struct ContentView: View {
             } ?? LactateTestDraft()
         )
         _editingTest = State(initialValue: initialEditingTest)
-        _loadedTestMode = State(initialValue: initialEditingTest == nil ? nil : .editing)
+        _loadedTestMode = State(initialValue: initialEditingTest == nil ? nil : (initialLoadedTestMode ?? .editing))
+        _comparedTestIDs = State(initialValue: initialComparedTestIDs)
     }
 
     var body: some View {
-        Group {
-            if showsNavigationChrome {
-                NavigationView {
-                    editorScrollView
-                        .navigationBarTitle(navigationTitle, displayMode: .inline)
-                }
-            } else {
-                editorScrollView
-            }
-        }
+        contentBody
+    }
+
+    @ViewBuilder
+    var contentBody: some View {
+        let baseContent = mainContent
         .preferredColorScheme(appearanceMode.colorScheme)
         .fullScreenCover(isPresented: $showFullScreenChart) {
             FullScreenLactateChartView(
@@ -198,30 +218,35 @@ struct ContentView: View {
         } message: { test in
             Text("This will permanently delete \(test.resolvedTestName) from saved tests.")
         }
+        .alert("Delete this athlete?", isPresented: $showDeleteAthleteAlert) {
+            Button("Delete", role: .destructive) {
+                deleteSelectedAthlete()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This will permanently delete the athlete and all associated tests.")
+        }
         .alert("Export Failed", isPresented: $showExportErrorAlert) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(exportErrorMessage ?? "An unknown export error occurred.")
         }
-        .sheet(item: $editorDestination) { destination in
-            NavigationStack {
-                ContentView(
-                    store: store,
-                    selectedAthlete: selectedAthlete,
-                    showsNavigationChrome: false,
-                    screenMode: .editor,
-                    initialEditingTest: destination.test
-                )
-                .navigationTitle(destination.test == nil ? "New Test" : "Edit Test")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") {
-                            editorDestination = nil
-                        }
-                    }
-                }
-            }
+        .alert("Cannot Compare Different Sports", isPresented: $showComparisonSportMismatchAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Choose tests from the same sport to compare. Running and cycling tests cannot be compared together.")
+        }
+        .alert("Resting Lactate", isPresented: $showRestingLactateInfoAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("This value is stored with the test but excluded from graph and threshold calculations.")
+        }
+        .alert(item: $activeThresholdInfoTopic) { topic in
+            Alert(
+                title: Text(topic.title),
+                message: Text(topic.message),
+                dismissButton: .cancel(Text("OK"))
+            )
         }
         .sheet(item: $activeFilterDatePicker) { picker in
             NavigationStack {
@@ -272,8 +297,55 @@ struct ContentView: View {
             }
             .presentationDetents([.medium])
         }
+        .sheet(isPresented: $showSampleTestPicker) {
+            SampleTestPickerView(
+                onSelect: { sample in
+                    loadSampleTest(sample)
+                },
+                onLoadAll: {
+                    loadAllSampleTests()
+                }
+            )
+        }
         .onAppear {
             applySelectedAthleteIfNeeded()
+        }
+
+        if isUsingExternalEditorDestination {
+            baseContent
+        } else {
+            baseContent.sheet(item: $editorDestination) { destination in
+                NavigationStack {
+                    ContentView(
+                        store: store,
+                        selectedAthlete: selectedAthlete,
+                        showsNavigationChrome: false,
+                        screenMode: .editor,
+                        initialEditingTest: destination.test
+                    )
+                    .navigationTitle(destination.test == nil ? "New Test" : "View/Edit")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") {
+                                editorDestination = nil
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    var mainContent: some View {
+        if showsNavigationChrome {
+            NavigationView {
+                editorScrollView
+                    .navigationBarTitle(navigationTitle, displayMode: .inline)
+            }
+        } else {
+            editorScrollView
         }
     }
 
@@ -327,54 +399,176 @@ struct ContentView: View {
         screenMode == .editor
     }
 
+    var isWorkspaceScreen: Bool {
+        screenMode == .workspace
+    }
+
+    var usesWideDetailAnalysisLayout: Bool {
+        screenMode == .detail && horizontalSizeClass == .regular
+    }
+
+    var usesWideEditorFormLayout: Bool {
+        isEditorScreen && horizontalSizeClass == .regular
+    }
+
+    var isUsingExternalEditorDestination: Bool {
+        externalEditorDestination != nil
+    }
+
+    var isUsingExternalComparisonDestination: Bool {
+        externalComparisonDestination != nil
+    }
+
     @ViewBuilder
-    var editorScrollView: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
+    var detailAnalysisSection: some View {
+        if usesWideDetailAnalysisLayout && hasEnoughDataForAnalysis {
+            HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 16) {
-                    Color.clear
-                        .frame(height: 1)
-                        .id("topOfForm")
-
-                    if !isEditorScreen {
-                        enterNewTestSection
-                        savedTestsSection
-                            .id("savedTestsSection")
-                            .background(
-                                GeometryReader { geometry in
-                                    Color.clear.preference(
-                                        key: SavedTestsTopPreferenceKey.self,
-                                        value: geometry.frame(in: .named("editorScroll")).minY
-                                    )
-                                }
-                            )
-                    }
-
-                    if isEditorScreen {
-                        editingBannerSection
-                        formSection
-                    }
-
-                    if isEditorScreen && hasEnoughDataForAnalysis {
-                        tableSection
-                    }
-
                     if shouldShowComparisonSection {
                         comparisonSection
                     }
 
-                    if hasEnoughDataForAnalysis {
-                        graphSection
-                        thresholdsSection
-                        trainingZonesSection
-                    }
+                    graphSection
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
 
-                    if isEditorScreen {
-                        saveSection
-                        sampleTestsSection
+                VStack(alignment: .leading, spacing: 16) {
+                    thresholdsSection
+                    trainingZonesSection
+                }
+                .frame(width: 320, alignment: .topLeading)
+            }
+        } else {
+            if shouldShowComparisonSection {
+                comparisonSection
+            }
+
+            if hasEnoughDataForAnalysis {
+                graphSection
+                thresholdsSection
+                trainingZonesSection
+            }
+        }
+    }
+
+    @ViewBuilder
+    var athleteDetailContent: some View {
+        if isUsingExternalComparisonDestination {
+            enterNewTestSection
+            savedTestsSection
+                .id("savedTestsSection")
+                .background(
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: SavedTestsTopPreferenceKey.self,
+                            value: geometry.frame(in: .named("editorScroll")).minY
+                        )
+                    }
+                )
+            deleteAthleteSection
+        } else
+        if usesWideDetailAnalysisLayout {
+            HStack(alignment: .top, spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
+                    enterNewTestSection
+                    savedTestsSection
+                        .id("savedTestsSection")
+                        .background(
+                            GeometryReader { geometry in
+                                Color.clear.preference(
+                                    key: SavedTestsTopPreferenceKey.self,
+                                    value: geometry.frame(in: .named("editorScroll")).minY
+                                )
+                            }
+                        )
+                    deleteAthleteSection
+                }
+                .frame(width: 380, alignment: .topLeading)
+
+                VStack(alignment: .leading, spacing: 16) {
+                    if hasEnoughDataForAnalysis || shouldShowComparisonSection {
+                        detailAnalysisSection
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Analysis")
+                                .font(.headline)
+                            Text("Load or compare tests to show the graph, threshold summary, and training zones.")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.secondarySystemBackground))
+                        .cornerRadius(12)
                     }
                 }
-                .padding()
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        } else {
+            enterNewTestSection
+            savedTestsSection
+                .id("savedTestsSection")
+                .background(
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: SavedTestsTopPreferenceKey.self,
+                            value: geometry.frame(in: .named("editorScroll")).minY
+                        )
+                    }
+                )
+            deleteAthleteSection
+            detailAnalysisSection
+        }
+    }
+
+    @ViewBuilder
+    var editorScrollView: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                HStack(alignment: .top) {
+                    Spacer(minLength: 0)
+
+                    VStack(alignment: .leading, spacing: 16) {
+                        Color.clear
+                            .frame(height: 1)
+                            .id("topOfForm")
+
+                        if screenMode == .detail {
+                            athleteDetailContent
+                        }
+
+                        if (isEditorScreen || isWorkspaceScreen) && editingTest != nil {
+                            analyzedTestSection
+                        }
+
+                        if (isEditorScreen || isWorkspaceScreen) && editingTest != nil && hasEnoughDataForAnalysis {
+                            tableSection
+                        }
+
+                        if isEditorScreen || isWorkspaceScreen {
+                            detailAnalysisSection
+                        }
+
+                        if isEditorScreen {
+                            formSection
+                        }
+
+                        if isEditorScreen && editingTest == nil && hasEnoughDataForAnalysis {
+                            tableSection
+                        }
+
+                        if isEditorScreen {
+                            saveSection
+                            if editingTest == nil {
+                                sampleTestsSection
+                            }
+                        }
+                    }
+                    .frame(maxWidth: 960, alignment: .leading)
+                    .padding()
+
+                    Spacer(minLength: 0)
+                }
             }
             .coordinateSpace(name: "editorScroll")
             .background(
@@ -428,11 +622,19 @@ struct ContentView: View {
     }
 
     var selectedComparisonTests: [LactateTest] {
-        filteredDisplayedTests
-            .filter { comparedTestIDs.contains($0.id) }
+        let comparisonIDs = activeComparedTestIDs
+        return filteredDisplayedTests
+            .filter { comparisonIDs.contains($0.id) }
             .sorted { lhs, rhs in
-                (comparedTestIDs.firstIndex(of: lhs.id) ?? 0) < (comparedTestIDs.firstIndex(of: rhs.id) ?? 0)
+                (comparisonIDs.firstIndex(of: lhs.id) ?? 0) < (comparisonIDs.firstIndex(of: rhs.id) ?? 0)
             }
+    }
+
+    var activeComparedTestIDs: [UUID] {
+        if let externalComparisonDestination = externalComparisonDestination?.wrappedValue {
+            return externalComparisonDestination.comparedTestIDs
+        }
+        return comparedTestIDs
     }
 
     var currentGraphPoints: [GraphPoint] {
@@ -585,7 +787,7 @@ struct ContentView: View {
         }
 
         if isEditorScreen {
-            dismiss()
+            closeEditor()
         }
         resetEntryFields()
     }
@@ -603,10 +805,12 @@ struct ContentView: View {
             athleteID: test.athleteID,
             athleteName: test.athleteName,
             testName: test.resolvedTestName,
+            restingLactate: test.restingLactate,
             temperatureCelsius: test.temperatureCelsius,
             temperatureUnit: test.temperatureUnit,
             humidityPercent: test.humidityPercent,
             terrain: test.terrain ?? "",
+            notes: test.notes ?? "",
             sport: test.sport,
             date: test.date,
             steps: test.steps
@@ -616,22 +820,85 @@ struct ContentView: View {
     }
 
     func isLoaded(_ test: LactateTest) -> Bool {
-        editingTest?.id == test.id
+        editingTest?.id == test.id && loadedTestMode == .editing
+    }
+
+    func isComparisonBase(_ test: LactateTest) -> Bool {
+        if let externalComparisonDestination = externalComparisonDestination?.wrappedValue {
+            return externalComparisonDestination.baseTestID == test.id
+        }
+        return editingTest?.id == test.id && loadedTestMode == .comparisonBase
     }
 
     func isCompared(_ test: LactateTest) -> Bool {
-        comparedTestIDs.contains(test.id)
+        activeComparedTestIDs.contains(test.id)
+    }
+
+    var comparisonBaseSport: Sport? {
+        if let externalComparisonDestination = externalComparisonDestination?.wrappedValue,
+           let baseTest = displayedTests.first(where: { $0.id == externalComparisonDestination.baseTestID }) {
+            return baseTest.sport
+        }
+        return editingTest?.sport
+    }
+
+    func hasMismatchedComparisonSport(_ test: LactateTest) -> Bool {
+        if let comparisonBaseSport {
+            return test.sport != comparisonBaseSport
+        }
+        return false
     }
 
     func canAddMoreComparisons(for test: LactateTest) -> Bool {
-        if isLoaded(test) { return false }
-        if comparedTestIDs.contains(test.id) { return true }
-        return comparedTestIDs.count < 2
+        if isLoaded(test) || isComparisonBase(test) { return false }
+        if activeComparedTestIDs.contains(test.id) { return true }
+        return activeComparedTestIDs.count < 2
+    }
+
+    func isCompareActionDisabled(for test: LactateTest) -> Bool {
+        if isLoaded(test) || isComparisonBase(test) { return true }
+        if activeComparedTestIDs.contains(test.id) { return false }
+        return activeComparedTestIDs.count >= 2
     }
 
     func addComparedTest(_ test: LactateTest) {
         savedTestsSectionTopBeforePreserving = savedTestsSectionTop
         shouldPreserveSavedTestsViewport = true
+
+        if let externalComparisonDestination {
+            if let externalEditorDestination {
+                externalEditorDestination.wrappedValue = nil
+            }
+
+            if let destination = externalComparisonDestination.wrappedValue {
+                guard let baseTest = displayedTests.first(where: { $0.id == destination.baseTestID }) else {
+                    externalComparisonDestination.wrappedValue = ComparisonDestination(
+                        baseTestID: test.id,
+                        comparedTestIDs: []
+                    )
+                    return
+                }
+                guard test.sport == baseTest.sport else {
+                    showComparisonSportMismatchAlert = true
+                    return
+                }
+                guard destination.baseTestID != test.id else { return }
+                guard !destination.comparedTestIDs.contains(test.id) else { return }
+                guard destination.comparedTestIDs.count < 2 else { return }
+
+                externalComparisonDestination.wrappedValue = ComparisonDestination(
+                    baseTestID: destination.baseTestID,
+                    comparedTestIDs: destination.comparedTestIDs + [test.id]
+                )
+            } else {
+                externalComparisonDestination.wrappedValue = ComparisonDestination(
+                    baseTestID: test.id,
+                    comparedTestIDs: []
+                )
+            }
+            selectedGraphPoint = nil
+            return
+        }
 
         if editingTest == nil {
             pendingScrollTarget = nil
@@ -639,6 +906,10 @@ struct ContentView: View {
             return
         }
 
+        guard test.sport == draft.sport else {
+            showComparisonSportMismatchAlert = true
+            return
+        }
         guard !isLoaded(test) else { return }
         guard !comparedTestIDs.contains(test.id) else { return }
         guard comparedTestIDs.count < 2 else { return }
@@ -647,6 +918,38 @@ struct ContentView: View {
     }
 
     func removeComparedTest(_ test: LactateTest) {
+        if let externalComparisonDestination, let destination = externalComparisonDestination.wrappedValue {
+            if destination.baseTestID == test.id {
+                if let nextBaseID = destination.comparedTestIDs.first {
+                    externalComparisonDestination.wrappedValue = ComparisonDestination(
+                        baseTestID: nextBaseID,
+                        comparedTestIDs: Array(destination.comparedTestIDs.dropFirst())
+                    )
+                } else {
+                    externalComparisonDestination.wrappedValue = nil
+                }
+            } else {
+                externalComparisonDestination.wrappedValue = ComparisonDestination(
+                    baseTestID: destination.baseTestID,
+                    comparedTestIDs: destination.comparedTestIDs.filter { $0 != test.id }
+                )
+            }
+            selectedGraphPoint = nil
+            return
+        }
+
+        if isComparisonBase(test) {
+            if let nextBaseID = comparedTestIDs.first,
+               let nextBaseTest = displayedTests.first(where: { $0.id == nextBaseID }) {
+                pendingScrollTarget = nil
+                loadTestIntoDraft(nextBaseTest, scrollTarget: nil, mode: .comparisonBase)
+            } else {
+                resetEntryFields()
+            }
+            selectedGraphPoint = nil
+            return
+        }
+
         comparedTestIDs.removeAll { $0 == test.id }
         selectedGraphPoint = nil
     }
@@ -661,8 +964,42 @@ struct ContentView: View {
     }
 
     func resetForm() {
+        if isEditorScreen && editingTest != nil {
+            cancelEditingSession()
+            return
+        }
+
         resetEntryFields()
         comparedTestIDs = []
+    }
+
+    func cancelEditingSession() {
+        resetEntryFields()
+        comparedTestIDs = []
+
+        if isEditorScreen {
+            closeEditor()
+        }
+    }
+
+    func presentEditor(for test: LactateTest?) {
+        let destination = EditorDestination(test: test)
+        if let externalComparisonDestination {
+            externalComparisonDestination.wrappedValue = nil
+        }
+        if let externalEditorDestination {
+            externalEditorDestination.wrappedValue = destination
+        } else {
+            editorDestination = destination
+        }
+    }
+
+    func closeEditor() {
+        if let externalEditorDestination {
+            externalEditorDestination.wrappedValue = nil
+        } else {
+            dismiss()
+        }
     }
 
     func clearTestFilters() {
@@ -687,78 +1024,65 @@ struct ContentView: View {
         showDeleteSingleTestAlert = false
     }
 
+    func deleteSelectedAthlete() {
+        guard let selectedAthlete else { return }
+        store.deleteAthlete(id: selectedAthlete.id)
+        dismiss()
+    }
+
     // MARK: - Sample Tests
 
-    func loadSampleTest1() {
-        loadCyclingSample(
-            athleteName: "Sample Test 1",
-            dateString: "04-29-23",
-            lactates: [1.7, 1.3, 1.9, 2.4, 3.4, 7.1],
-            heartRates: [114, 124, 127, 133, 138, 147],
-            powers: [127, 124, 142, 162, 183, 204]
-        )
+    func loadSampleTest(_ sample: SampleTestTemplate) {
+        draft = sampleDraft(from: sample)
+
+        editingTest = nil
+        loadedTestMode = nil
+        graphXAxis = .power
+        selectedGraphPoint = nil
     }
 
-    func loadSampleTest2() {
-        loadCyclingSample(
-            athleteName: "Sample Test 2",
-            dateString: "04-04-23",
-            lactates: [1.6, 1.7, 1.8, 3.2, 3.7, 7.2],
-            heartRates: [107, 112, 119, 129, 132, 141],
-            powers: [118, 122, 143, 163, 183, 209]
-        )
+    func loadAllSampleTests() {
+        for sample in SampleTestCatalog.all {
+            store.appendTest(sampleDraft(from: sample).asLactateTest())
+        }
     }
 
-    func loadSampleTest3() {
-        loadCyclingSample(
-            athleteName: "Sample Test 3",
-            dateString: "02-25-23",
-            lactates: [1.9, 1.7, 2.6, 3.8, 5.6],
-            heartRates: [115, 119, 127, 136, 141],
-            powers: [125, 122, 143, 164, 183]
-        )
-    }
-
-    func loadCyclingSample(
-        athleteName: String,
-        dateString: String,
-        lactates: [Double],
-        heartRates: [Int],
-        powers: [Int]
-    ) {
+    func sampleDraft(from sample: SampleTestTemplate) -> LactateTestDraft {
         let formatter = DateFormatter()
-        formatter.dateFormat = "MM-dd-yy"
+        formatter.dateFormat = "yyyy-MM-dd"
 
-        let count = min(lactates.count, heartRates.count, powers.count)
-        var loadedSteps: [LactateStep] = []
-
-        for index in 0..<count {
-            loadedSteps.append(
-                LactateStep(
-                    stepIndex: index + 1,
-                    lactate: lactates[index],
-                    avgHeartRate: heartRates[index],
-                    runningPaceSecondsPerKm: nil,
-                    cyclingSpeedKmh: nil,
-                    powerWatts: powers[index]
-                )
+        let loadedSteps = sample.steps.enumerated().map { index, step in
+            LactateStep(
+                stepIndex: index + 1,
+                lactate: step.lactate,
+                avgHeartRate: step.avgHeartRate,
+                runningPaceSecondsPerKm: parseRunningPace(step.runningPace),
+                cyclingSpeedKmh: nil,
+                powerWatts: step.power
             )
         }
 
         let targetAthleteID = selectedAthlete?.id
-        let targetAthleteName = selectedAthlete?.name ?? athleteName
+        let targetAthleteName = selectedAthlete?.name ?? "Untitled Athlete"
 
-        draft = LactateTestDraft(
+        return LactateTestDraft(
             athleteID: targetAthleteID,
             athleteName: targetAthleteName,
-            sport: .cycling,
-            date: formatter.date(from: dateString) ?? Date(),
+            sport: sample.sport,
+            date: formatter.date(from: sample.dateString) ?? Date(),
             steps: loadedSteps.isEmpty ? [LactateStep.emptyStep(stepIndex: 1)] : loadedSteps
         )
+    }
 
-        editingTest = nil
-        graphXAxis = .power
-        selectedGraphPoint = nil
+    func parseRunningPace(_ value: String?) -> Int? {
+        guard let value else { return nil }
+        let parts = value.split(separator: ":")
+        guard parts.count == 2,
+              let minutes = Int(parts[0]),
+              let seconds = Int(parts[1]) else {
+            return nil
+        }
+        return (minutes * 60) + seconds
     }
 
     // MARK: - File Helpers
@@ -871,6 +1195,30 @@ struct ContentView: View {
                 case .fahrenheit:
                     draft.temperatureCelsius = (enteredValue - 32.0) * 5.0 / 9.0
                 }
+            }
+        )
+    }
+
+    func restingLactateStringBinding() -> Binding<String> {
+        Binding(
+            get: {
+                guard let restingLactate = draft.restingLactate else { return "" }
+                return String(format: "%.2f", restingLactate)
+            },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                guard !trimmed.isEmpty else {
+                    draft.restingLactate = nil
+                    return
+                }
+
+                guard let enteredValue = Double(trimmed.replacingOccurrences(of: ",", with: ".")) else {
+                    draft.restingLactate = nil
+                    return
+                }
+
+                draft.restingLactate = max(0.0, enteredValue)
             }
         )
     }

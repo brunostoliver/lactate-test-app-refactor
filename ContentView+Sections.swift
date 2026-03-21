@@ -3,10 +3,53 @@ import SwiftUI
 extension ContentView {
     // MARK: - Sections
 
+    @ViewBuilder
+    var environmentFieldsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Environment")
+                .font(.headline)
+
+            HStack(spacing: 12) {
+                TextField("Temperature", text: temperatureStringBinding())
+                    .keyboardType(.decimalPad)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                Picker("Temp Unit", selection: $draft.temperatureUnit) {
+                    ForEach(TemperatureUnit.allCases) { unit in
+                        Text(unit.title).tag(unit)
+                    }
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .frame(maxWidth: 120)
+            }
+
+            TextField("Humidity (%)", text: humidityStringBinding())
+                .keyboardType(.decimalPad)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+
+            TextField("Place / terrain (track, road, treadmill, etc.)", text: $draft.terrain)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+        }
+    }
+
+    var notesSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Notes")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            TextEditor(text: $draft.notes)
+                .frame(minHeight: 120)
+                .padding(8)
+                .background(Color(.secondarySystemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
     var enterNewTestSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                editorDestination = EditorDestination(test: nil)
+                presentEditor(for: nil)
             } label: {
                 Label("Enter New Test", systemImage: "square.and.pencil")
             }
@@ -118,45 +161,10 @@ extension ContentView {
         .cornerRadius(12)
     }
 
-    var editingBannerSection: some View {
-        Group {
-            if let editingTest, loadedTestMode == .editing {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Text("Loaded")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.orange.opacity(0.25))
-                            .cornerRadius(6)
-
-                        Text("Viewing loaded saved test - \(editingTest.resolvedTestName)")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                    }
-
-                    Text("You may review the values below or modify them and tap Update Test.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    Button("Cancel Viewing/Editing") {
-                        resetEntryFields()
-                    }
-                    .font(.caption)
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.orange.opacity(0.15))
-                .cornerRadius(8)
-            }
-        }
-    }
-
     var formSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(loadedTestMode == .editing ? "Loaded Saved Test" : "Test Details")
+                Text("Test Details")
                     .font(.headline)
 
                 Spacer()
@@ -166,12 +174,6 @@ extension ContentView {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-            }
-
-            if loadedTestMode == .editing {
-                Text("This saved test is loaded into the form. Tap Update Test to save any changes.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
 
             if selectedAthlete == nil {
@@ -197,29 +199,39 @@ extension ContentView {
 
             Divider()
 
-            Text("Environment")
-                .font(.headline)
+            if usesWideEditorFormLayout {
+                HStack(alignment: .top, spacing: 16) {
+                    environmentFieldsSection
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
 
-            HStack(spacing: 12) {
-                TextField("Temperature", text: temperatureStringBinding())
-                    .keyboardType(.decimalPad)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-
-                Picker("Temp Unit", selection: $draft.temperatureUnit) {
-                    ForEach(TemperatureUnit.allCases) { unit in
-                        Text(unit.title).tag(unit)
-                    }
+                    notesSection
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-                .pickerStyle(SegmentedPickerStyle())
-                .frame(maxWidth: 120)
+            } else {
+                environmentFieldsSection
+                notesSection
             }
 
-            TextField("Humidity (%)", text: humidityStringBinding())
-                .keyboardType(.decimalPad)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
+            Divider()
 
-            TextField("Place / terrain (track, road, treadmill, etc.)", text: $draft.terrain)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text("Resting Lactate")
+                        .font(.headline)
+
+                    Button(action: {
+                        showRestingLactateInfoAlert = true
+                    }) {
+                        Image(systemName: "info.circle")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                TextField("mmol/L", text: restingLactateStringBinding())
+                    .keyboardType(.decimalPad)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+            }
 
             Divider()
 
@@ -252,7 +264,7 @@ extension ContentView {
 
     var tableSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Current Input Summary")
+            Text("Input Summary")
                 .font(.headline)
 
             HStack {
@@ -313,7 +325,7 @@ extension ContentView {
             Text("Comparison")
                 .font(.headline)
 
-            Text("The graph always includes the current input test. You may add up to 2 saved tests for comparison.")
+            Text("The graph always includes the analyzed test. You may add up to 2 saved tests for comparison.")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
@@ -321,7 +333,7 @@ extension ContentView {
                 comparisonLegendRow(
                     colorName: .blue,
                     title: currentSeriesLabel,
-                    subtitle: "Current input"
+                    subtitle: "Analyzed test"
                 )
 
                 if selectedComparisonTests.indices.contains(0) {
@@ -395,7 +407,7 @@ extension ContentView {
             .pickerStyle(SegmentedPickerStyle())
 
             if currentGraphPoints.count < 2 {
-                Text("Enter at least two valid current-input points with lactate and the selected X-axis value to display the graph.")
+                Text("Enter at least two valid analyzed-test points with lactate and the selected X-axis value to display the graph.")
                     .foregroundColor(.secondary)
             } else {
                 LactateChartView(
@@ -419,57 +431,87 @@ extension ContentView {
         }
     }
 
+    var analyzedTestSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(currentSeriesLabel)
+                .font(.headline)
+                .foregroundColor(.blue)
+
+            Text("\(shortDateString(draft.date)) - \(draft.sport.rawValue.capitalized)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.blue.opacity(0.08))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.blue.opacity(0.25), lineWidth: 1)
+        )
+        .cornerRadius(12)
+    }
+
     var thresholdsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
 
-            Text("Threshold Summary (Current Input)")
+            Text("Threshold Summary")
                 .font(.headline)
 
             if currentGraphPoints.count < 2 {
-                Text("Not enough current-input data to estimate thresholds.")
+                Text("Not enough analyzed-test data to estimate thresholds.")
                     .foregroundColor(.secondary)
             } else {
                 VStack(alignment: .leading, spacing: 4) {
                     if let lt1 = interpolatedThresholdPoint(targetLactate: 2.0) {
-                        Text("LT1 (2.0 mmol/L): \(formatXAxisValue(lt1.x))")
-                            .foregroundColor(.green)
+                        thresholdSummaryRow(
+                            title: "LT1",
+                            value: formatXAxisValue(lt1.x),
+                            infoTopic: .lt1
+                        )
                     } else {
-                        Text("LT1 (2.0 mmol/L): not reached in the current data")
-                            .foregroundColor(.secondary)
+                        thresholdSummaryUnavailableRow(title: "LT1", infoTopic: .lt1)
                     }
 
                     if let dmaxLactate = primaryDmaxLactate,
                        let dmax = interpolatedThresholdPoint(targetLactate: dmaxLactate) {
-                        Text("Dmax: \(formatXAxisValue(dmax.x)) at lactate \(String(format: "%.2f", dmaxLactate)) mmol/L")
-                            .foregroundColor(.purple)
+                        thresholdSummaryRow(
+                            title: "Dmax",
+                            value: "\(formatXAxisValue(dmax.x)) - \(String(format: "%.2f", dmaxLactate)) mmol/L",
+                            infoTopic: .dmax
+                        )
                     } else {
-                        Text("Dmax: not enough data")
-                            .foregroundColor(.secondary)
+                        thresholdSummaryUnavailableRow(title: "Dmax", infoTopic: .dmax)
                     }
 
                     if let modified = modifiedDmaxResult {
-                        Text("Modified Dmax (Newell): \(formatPrimaryWorkload(modified.workload)) at lactate \(String(format: "%.2f", modified.lactate)) mmol/L")
-                            .foregroundColor(.indigo)
+                        thresholdSummaryRow(
+                            title: "Modified Dmax",
+                            value: "\(formatPrimaryWorkload(modified.workload)) - \(String(format: "%.2f", modified.lactate)) mmol/L",
+                            infoTopic: .modifiedDmax
+                        )
                     } else {
-                        Text("Modified Dmax (Newell): not enough data")
-                            .foregroundColor(.secondary)
+                        thresholdSummaryUnavailableRow(title: "Modified Dmax", infoTopic: .modifiedDmax)
                     }
 
                     if let logLog = logLogBreakpointResult {
-                        Text("Log-log breakpoint: \(formatPrimaryWorkload(logLog.workload)) at lactate \(String(format: "%.2f", logLog.lactate)) mmol/L")
-                            .foregroundColor(.brown)
+                        thresholdSummaryRow(
+                            title: "Log-Log",
+                            value: "\(formatPrimaryWorkload(logLog.workload)) - \(String(format: "%.2f", logLog.lactate)) mmol/L",
+                            infoTopic: .logLog
+                        )
                     } else {
-                        Text("Log-log breakpoint: not enough data")
-                            .foregroundColor(.secondary)
+                        thresholdSummaryUnavailableRow(title: "Log-Log", infoTopic: .logLog)
                     }
 
                     if let lt2 = interpolatedThresholdPoint(targetLactate: 4.0) {
-                        Text("LT2 (4.0 mmol/L): \(formatXAxisValue(lt2.x))")
-                            .foregroundColor(.red)
+                        thresholdSummaryRow(
+                            title: "LT2",
+                            value: formatXAxisValue(lt2.x),
+                            infoTopic: .lt2
+                        )
                     } else {
-                        Text("LT2 (4.0 mmol/L): not reached in the current data")
-                            .foregroundColor(.secondary)
+                        thresholdSummaryUnavailableRow(title: "LT2", infoTopic: .lt2)
                     }
                 }
                 .font(.caption)
@@ -480,11 +522,47 @@ extension ContentView {
         }
     }
 
+    func thresholdSummaryRow(
+        title: String,
+        value: String,
+        infoTopic: ThresholdInfoTopic
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("\(title): \(value)")
+
+            Button(action: {
+                activeThresholdInfoTopic = infoTopic
+            }) {
+                Image(systemName: "info.circle")
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    func thresholdSummaryUnavailableRow(
+        title: String,
+        infoTopic: ThresholdInfoTopic
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("\(title): unavailable")
+                .foregroundColor(.secondary)
+
+            Button(action: {
+                activeThresholdInfoTopic = infoTopic
+            }) {
+                Image(systemName: "info.circle")
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     var trainingZonesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Divider()
 
-            Text("5-Zone Training Model (Current Input)")
+            Text("5-Zone Training Model")
                 .font(.headline)
 
             if let powerZones = powerFiveZones {
@@ -595,9 +673,9 @@ extension ContentView {
 
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
-                    Button(action: saveCurrentTest) {
-                        Label(editingTest == nil ? "Save Test" : "Update Test", systemImage: "square.and.arrow.down")
-                    }
+                Button(action: saveCurrentTest) {
+                    Label(editingTest == nil ? "Save Test" : "Save Changes", systemImage: "square.and.arrow.down")
+                }
                     .buttonStyle(FilledActionButtonStyle())
                     .disabled(
                         draft.athleteName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
@@ -678,9 +756,9 @@ extension ContentView {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 8) {
                                 Button(action: {
-                                    editorDestination = EditorDestination(test: test)
+                                    presentEditor(for: test)
                                 }) {
-                                    Label("Load/Edit", systemImage: "square.and.pencil")
+                                    Label("View/Edit", systemImage: "square.and.pencil")
                                 }
                                 .buttonStyle(SecondaryActionButtonStyle())
 
@@ -709,7 +787,7 @@ extension ContentView {
                             }
 
                             HStack(spacing: 8) {
-                                if isCompared(test) {
+                                if isComparisonBase(test) || isCompared(test) {
                                     Button(action: {
                                         removeComparedTest(test)
                                     }) {
@@ -723,7 +801,7 @@ extension ContentView {
                                         Label("Compare", systemImage: "chart.line.uptrend.xyaxis")
                                     }
                                     .buttonStyle(SecondaryActionButtonStyle())
-                                    .disabled(!canAddMoreComparisons(for: test))
+                                    .disabled(isCompareActionDisabled(for: test))
                                 }
                             }
                         }
@@ -741,31 +819,28 @@ extension ContentView {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
 
-            Text("Sample Tests")
-                .font(.headline)
-
-            Text("Temporary utilities for loading example data.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            Button(action: loadSampleTest1) {
-                HStack {
-                    Image(systemName: "doc.badge.plus")
-                    Text("Load Test Sample 1")
-                }
+            Button(action: {
+                showSampleTestPicker = true
+            }) {
+                Label("Browse Sample Tests", systemImage: "link")
+                    .font(.caption)
             }
+            .buttonStyle(.plain)
+        }
+    }
 
-            Button(action: loadSampleTest2) {
-                HStack {
-                    Image(systemName: "doc.badge.plus")
-                    Text("Load Test Sample 2")
-                }
-            }
+    var deleteAthleteSection: some View {
+        Group {
+            if selectedAthlete != nil && !isEditorScreen {
+                VStack(alignment: .leading, spacing: 8) {
+                    Divider()
 
-            Button(action: loadSampleTest3) {
-                HStack {
-                    Image(systemName: "doc.badge.plus")
-                    Text("Load Test Sample 3")
+                    Button(action: {
+                        showDeleteAthleteAlert = true
+                    }) {
+                        Label("Delete Athlete", systemImage: "trash")
+                    }
+                    .buttonStyle(DestructiveActionButtonStyle())
                 }
             }
         }

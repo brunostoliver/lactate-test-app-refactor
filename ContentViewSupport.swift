@@ -7,6 +7,7 @@ enum ThresholdInfoTopic: String, Identifiable {
     case logLog
     case lt2
     case vo2Max
+    case ftp
 
     var id: String { rawValue }
 
@@ -24,6 +25,8 @@ enum ThresholdInfoTopic: String, Identifiable {
             return "LT2"
         case .vo2Max:
             return "Estimated VO2max"
+        case .ftp:
+            return "Estimated FTP"
         }
     }
 
@@ -41,6 +44,8 @@ enum ThresholdInfoTopic: String, Identifiable {
             return "Second lactate turnpoint, commonly estimated near 4.0 mmol/L."
         case .vo2Max:
             return "Estimated from LT2. Running uses flat pace cost; cycling uses power, weight, and LT2."
+        case .ftp:
+            return "Cycling-only estimate using LT2 power. Relative FTP uses test-day body mass."
         }
     }
 }
@@ -178,6 +183,11 @@ struct WorkloadThresholdResult {
 struct VO2MaxEstimate {
     let value: Double
     let methodSummary: String
+}
+
+struct FTPEstimate {
+    let watts: Double
+    let wattsPerKg: Double?
 }
 
 enum VO2ClassificationLabel: String {
